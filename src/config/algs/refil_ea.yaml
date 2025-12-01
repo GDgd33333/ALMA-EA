@@ -1,0 +1,74 @@
+# --- QMIX specific parameters ---
+
+# use epsilon greedy action selector
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 500000
+
+runner: "parallel"
+batch_size_run: 8
+training_iters: 8
+
+entity_last_action: True # Include the user-controlled agents' last actions (one_hot) in their entities
+
+buffer_size: 5000
+
+# update the target network every {} episodes
+target_update_interval: 200
+
+# use the Q_Learner to train
+agent_output_type: "q"
+learner: "q_learner"
+double_q: True
+mixer: "flex_qmix"
+mixing_embed_dim: 32
+hypernet_embed: 128
+softmax_mixing_weights: True
+rnn_hidden_dim: 64
+mac: "entity_mac"
+attn_embed_dim: 128
+attn_n_heads: 4
+lmbda: 0.5
+agent:
+  recurrent: False
+  entity_scheme: True
+  imagine: True 
+  subtask_cond: "mask"   # None
+  rnn_hidden_dim: 64  # 智能体RNN隐藏层维度：64维
+  obs_agent_id: True  # 观察中是否包含智能体ID：包含（SMAC环境必需）
+  obs_last_action: True  # 观察中是否包含最后动作：包含（SMAC环境必需）
+
+
+# ==================== 进化算法(EA)配置 ====================
+use_ea: True  # 是否启用进化算法：启用
+ea_config:
+  population_size: 5  # 种群大小：5个个体
+  elite_size: 2  # 精英个体数量：保留2个最优个体
+  mutation_rate: 0.1  # 变异率：10%的基因发生变异
+  mutation_strength: 0.1  # 变异强度：变异幅度为0.1
+  crossover_rate: 0.8  # 交叉率：80%的个体参与交叉
+  selection_type: "tournament"  # 选择策略：锦标赛选择
+  tournament_size: 3  # 锦标赛大小：每次选择3个个体竞争
+  evaluation_episodes: 5  # 评估episode数：每个个体评估5个episode
+  sync_interval: 10000  # 同步间隔：每10000步进行一次同步
+  # 双向同步配置
+  enable_bidirectional_sync: True  # 启用双向同步：允许种群和主网络相互学习
+  sync_threshold: 0.05  # 同步阈值：性能提升超过5%才进行同步
+
+# ==================== 分层智能体配置 ====================
+# Hierarchical agent configuration
+hier_agent:
+  task_allocation: "aql"  # 任务分配策略：注意力查询语言(AQL)
+  n_proposals: 32  # 提案数量：生成32个任务分配提案
+  action_length: 3  # 动作序列长度：每个动作序列长度为3
+  subtask_mask: True  # 是否使用子任务掩码：使用
+
+# ==================== 日志和模型保存 ====================
+# Logging and saving
+use_tensorboard: True  # 是否使用TensorBoard：使用
+save_model: True  # 是否保存模型：保存
+save_model_interval: 1000000  # 模型保存间隔：每100万步保存一次模型
+
+name: "refil_ea"
+

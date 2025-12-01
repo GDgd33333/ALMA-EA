@@ -1,0 +1,82 @@
+# --- QMIX with EA Bidirectional Sync ---
+# 配置文件：QMIX算法结合进化算法(EA)和双向同步机制
+
+# ==================== 动作选择策略 ====================
+# use epsilon greedy action selector
+action_selector: "epsilon_greedy"  # 动作选择器类型：epsilon贪心策略
+epsilon_start: 1.0  # 探索率初始值：100%随机探索
+epsilon_finish: 0.05  # 探索率最终值：5%随机探索
+epsilon_anneal_time: 2000000  # 探索率退火时间：200万步内从1.0降到0.05
+
+# ==================== 训练运行配置 ====================
+runner: "parallel"  # 运行器类型：并行训练
+batch_size_run: 8  # 并行运行的批次大小：8个环境同时运行
+training_iters: 8  # 每次训练迭代的步数：8步
+
+# ==================== 实体和观察配置 ====================
+entity_last_action: True # 是否在实体中包含用户控制智能体的最后动作（one-hot编码）
+
+# ==================== 经验回放配置 ====================
+buffer_size: 5000  # 经验回放缓冲区大小：存储5000个经验
+
+# ==================== 目标网络更新 ====================
+# update the target network every {} episodes
+target_update_interval: 150  # 目标网络更新间隔：每150个episode更新一次
+
+# ==================== Q学习配置 ====================
+# use the Q_Learner to train
+agent_output_type: "q"  # 智能体输出类型：Q值
+learner: "q_learner"  # 学习器类型：Q学习器
+double_q: True  # 是否使用Double Q-learning：减少过估计问题
+mixer: "flex_qmix"  # 混合网络类型：灵活的QMIX混合器
+mixing_embed_dim: 32  # 混合网络嵌入维度：32维
+hypernet_embed: 128  # 超网络嵌入维度：128维
+softmax_mixing_weights: True  # 是否对混合权重使用softmax：确保权重和为1
+rnn_hidden_dim: 64  # RNN隐藏层维度：64维
+mac: "entity_mac"  # 多智能体控制器类型：实体MAC
+attn_embed_dim: 128  # 注意力机制嵌入维度：128维
+attn_n_heads: 4  # 注意力头数：4个注意力头
+lmbda: 0.5  # 混合权重参数：0.5
+
+# ==================== 智能体配置 ====================
+agent:
+  recurrent: False  # 是否使用循环神经网络：不使用RNN
+  entity_scheme: True  # 是否使用实体方案：使用实体表示
+  imagine: False  # 是否使用想象机制：不使用想象
+  subtask_cond: "mask"  # 子任务条件类型：使用掩码机制
+  rnn_hidden_dim: 64  # 智能体RNN隐藏层维度：64维
+  obs_agent_id: True  # 观察中是否包含智能体ID：包含
+  obs_last_action: True  # 观察中是否包含最后动作：包含
+
+# ==================== 进化算法(EA)配置 ====================
+use_ea: True  # 是否启用进化算法：启用
+ea_config:
+  population_size: 5  # 种群大小：5个个体
+  elite_size: 2  # 精英个体数量：保留2个最优个体
+  mutation_rate: 0.1  # 变异率：10%的基因发生变异
+  mutation_strength: 0.1  # 变异强度：变异幅度为0.1
+  crossover_rate: 0.8  # 交叉率：80%的个体参与交叉
+  selection_type: "tournament"  # 选择策略：锦标赛选择
+  tournament_size: 3  # 锦标赛大小：每次选择3个个体竞争
+  evaluation_episodes: 5  # 评估episode数：每个个体评估5个episode
+  sync_interval: 10000  # 同步间隔：每10000步进行一次同步
+  # 双向同步配置
+  enable_bidirectional_sync: True  # 启用双向同步：允许种群和主网络相互学习
+  sync_threshold: 0.05  # 同步阈值：性能提升超过5%才进行同步
+
+# ==================== 分层智能体配置 ====================
+# Hierarchical agent configuration
+hier_agent:
+  task_allocation: "aql"  # 任务分配策略：注意力查询语言(AQL)
+  n_proposals: 32  # 提案数量：生成32个任务分配提案
+  action_length: 5  # 动作序列长度：每个动作序列长度为5
+  subtask_mask: True  # 是否使用子任务掩码：使用
+
+# ==================== 日志和模型保存 ====================
+# Logging and saving
+use_tensorboard: True  # 是否使用TensorBoard：使用
+save_model: True  # 是否保存模型：保存
+save_model_interval: 1000000  # 模型保存间隔：每100万步保存一次模型
+
+# ==================== 实验名称 ====================
+name: "qmix_atten_ea"  # 实验名称：qmix_atten_ea
