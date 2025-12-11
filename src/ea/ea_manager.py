@@ -61,7 +61,8 @@ class EAManager:
         self.sync_stats = {  # 同步统计信息
             'ea_to_main_syncs': 0,  # EA到主网络的同步次数
             'main_to_ea_syncs': 0,  # 主网络到EA的同步次数
-            'no_sync_needed': 0  # 不需要同步的次数
+            'no_ea_to_main_sync': 0,  # EA未同步到主网络的次数（未达到阈值）
+            'no_main_to_ea_sync': 0  # 主网络未同步到EA的次数（未达到阈值）
         }
         
         # 统计信息字典
@@ -280,11 +281,11 @@ class EAManager:
     
     def _bidirectional_sync(self, main_network_fitness: float, main_alloc_policy):
         """
-        双向同步机制（新策略：RL无条件替换EA最差，EA需要阈值才替换RL）
+        双向同步机制（双向都有阈值限制）
         
-        新策略：
-        1. 每次评估时，无条件让RL替换EA最差个体（确保EA种群总是获得RL的最新改进）
-        2. 只有当EA最优明显优于RL时（需要阈值），才让EA替换RL的参数
+        策略：
+        1. RL → EA：只有当主网络明显优于EA最差个体时（超过阈值），才替换EA最差个体
+        2. EA → RL：只有当EA最优明显优于主网络时（超过阈值），才同步到主网络
         
         Args:
             main_network_fitness: 主网络适应度
@@ -301,12 +302,16 @@ class EAManager:
         print(f"  EA best: {best_ea_fitness:.4f}, EA avg: {avg_ea_fitness:.4f}, EA worst: {worst_ea_fitness:.4f}")
         print(f"  Main network: {main_network_fitness:.4f}")
         
-        # 策略1：无条件让RL替换EA最差个体（确保EA种群总是获得RL的最新改进）
-        print(f"  → Always replacing worst EA individual with RL (unconditional)")
-        self._replace_worst_with_main_network(main_network_fitness, main_alloc_policy)
-        self.sync_stats['main_to_ea_syncs'] += 1  # 更新同步统计
+        # 策略1：只有当主网络明显优于EA最差个体时，才替换EA最差个体（阈值控制）
+        if main_network_fitness > worst_ea_fitness + self.sync_threshold:
+            print(f"  → Main network significantly outperforms worst EA: {main_network_fitness:.4f} > {worst_ea_fitness:.4f} + {self.sync_threshold:.4f}")
+            self._replace_worst_with_main_network(main_network_fitness, main_alloc_policy)
+            self.sync_stats['main_to_ea_syncs'] += 1  # 更新同步统计
+        else:
+            print(f"  → Main network ({main_network_fitness:.4f}) not significantly better than worst EA ({worst_ea_fitness:.4f}), no RL→EA sync")
+            self.sync_stats['no_main_to_ea_sync'] = self.sync_stats.get('no_main_to_ea_sync', 0) + 1  # 更新统计
         
-        # 策略2：只有当EA最优明显优于RL时，才让EA替换RL（需要阈值，避免频繁切换）
+        # 策略2：只有当EA最优明显优于主网络时，才让EA替换RL（阈值控制）
         if best_ea_fitness > main_network_fitness + self.sync_threshold:
             print(f"  → EA best significantly outperforms main network: {best_ea_fitness:.4f} > {main_network_fitness:.4f} + {self.sync_threshold:.4f}")
             # 同步EA最优个体到主网络
@@ -438,7 +443,8 @@ class EAManager:
             print(f"\n=== Bidirectional Sync Stats ===")
             print(f"EA → Main syncs: {self.sync_stats['ea_to_main_syncs']}")  # EA到主网络同步次数
             print(f"Main → EA syncs: {self.sync_stats['main_to_ea_syncs']}")  # 主网络到EA同步次数
-            print(f"No sync needed: {self.sync_stats['no_sync_needed']}")  # 不需要同步次数
+            print(f"No EA→Main sync (threshold not met): {self.sync_stats.get('no_ea_to_main_sync', 0)}")  # EA未同步到主网络次数
+            print(f"No Main→EA sync (threshold not met): {self.sync_stats.get('no_main_to_ea_sync', 0)}")  # 主网络未同步到EA次数
             print(f"Sync threshold: {self.sync_threshold:.4f}")  # 同步阈值
         
         print("=" * 40)  # 打印分隔线
