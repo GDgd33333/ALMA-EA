@@ -63,7 +63,7 @@ agent:
   imagine: False
   subtask_cond: # None, options=['mask', 'full_obs'], method by which we condition agents on their subtask
 hier_agent:
-  task_allocation: # None, options=['heuristic', 'aql', 'random', 'random_fixed']
+  task_allocation: # None, options=['heuristic', 'aql', 'a2c', 'ppo', 'random', 'random_fixed']
   copa: False  # whether to use Coach-Player framework - code adapted from official https://github.com/Cranial-XIX/marl-copa
   mask_copa: True  # whether to mask COPA when combined with task allocation
   copa_vi_loss: True  # whether to train VI loss with COPA
@@ -77,6 +77,10 @@ hier_agent:
   entropy_loss: 0.01
   alloc_opt: 'rmsprop'
   max_bs: 400  # max batch size for alloc training (lower action_length will result in higher batch size which may overflow memory)
+  # PPO specific hyperparameters
+  ppo_epochs: 4  # number of PPO update epochs (using same batch data)
+  ppo_clip: 0.2  # PPO clipping parameter (limits policy update magnitude)
+  ppo_minibatch_size: null  # PPO minibatch size (null = full batch, or set to integer like 64)
   pi_ag_attn: False
   subtask_mask: True
   sel_task_upd: True

@@ -77,9 +77,13 @@ class AllocationGenome:
             AllocationGenome: 新的基因组实例
         """
         new_genome = AllocationGenome(self.alloc_policy, self.genome_id)  # 创建新的基因组实例
+        # 关键修复：完整复制所有fitness相关属性，确保clone后的fitness统计正确
         new_genome.fitness = self.fitness  # 复制适应度值
-        new_genome.fitness_history = self.fitness_history.copy()  # 复制适应度历史（浅拷贝列表）
+        new_genome.fitness_history = self.fitness_history.copy() if self.fitness_history else []  # 复制适应度历史（深拷贝列表）
         new_genome.evaluation_count = self.evaluation_count  # 复制评估次数
+        # 确保clone后的genome能正确计算平均适应度
+        # 如果evaluation_count > 0，get_average_fitness()会返回fitness/evaluation_count
+        # 如果evaluation_count == 0，get_average_fitness()会返回0.0（这是正确的行为）
         return new_genome
     
     def reset_fitness(self):

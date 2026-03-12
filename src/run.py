@@ -22,7 +22,7 @@ from controllers import REGISTRY as mac_REGISTRY
 from envs import s_REGISTRY
 from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
-from ea import EAManager
+from ea import EAManager, EliteBuffer
 
 
 def run(config, console_logger, wandb_run):
@@ -260,6 +260,19 @@ def run_sequential(args, logger):
             if args.hier_agent["task_allocation"] is not None or args.hier_agent["copa"]:
                 scheme["hier_decision"] = {"vshape": (1,), "dtype": th.uint8}
                 args.pre_transition_items += ['hier_decision']
+                # PPO需要保存旧策略的log_prob和actions
+                # 注意：old_log_prob和old_actions不在pre_transition_items中，因为它们不是从环境接收的数据
+                # 它们是在compute_allocation中计算并直接保存到ep_batch的
+                if args.hier_agent["task_allocation"] == "ppo":
+                    scheme["old_log_prob"] = {"vshape": (1,), "dtype": th.float32}
+                    scheme["old_actions"] = {"vshape": (args.n_agents, args.n_tasks), "dtype": th.float32}
+                    # 关键修复：添加alloc_actions字段，专门用于存储高层分配动作（用于精英蒸馏）
+                    scheme["alloc_actions"] = {"vshape": (args.n_agents, args.n_tasks), "dtype": th.float32}
+                    # AR模式需要保存alloc_order（分配顺序）
+                    # 如果使用AR模式，alloc_order用于训练时重算logprob
+                    if args.hier_agent.get("use_autoreg", False) or args.hier_agent.get("pi_autoreg", False):
+                        scheme["alloc_order"] = {"vshape": (args.n_agents,), "dtype": th.long}
+                    # 不需要添加到pre_transition_items，因为它们不是从环境接收的数据
 
     preprocess = {
         "actions": ("actions_onehot", [OneHot(out_dim=args.n_actions)])
@@ -277,15 +290,30 @@ def run_sequential(args, logger):
     # Give runner the scheme
     runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac)
 
+    # 初始化精英缓存池（用于EA精英蒸馏）
+    elite_buffer = None
+    if hasattr(args, 'use_ea') and args.use_ea and args.hier_agent["task_allocation"] in ["aql", "a2c", "ppo"]:
+        elite_buffer = EliteBuffer(
+            max_size=args.ea_config.get('elite_buffer_size', 200),
+            min_score=args.ea_config.get('elite_min_score', 0.0),
+            device=args.device,
+            use_relative_ranking=args.ea_config.get('elite_use_relative_ranking', True),  # 默认启用相对排名
+            top_k_percent=args.ea_config.get('elite_top_k_percent', 0.3)  # 默认保存前30%
+        )
+        logger.console_logger.info("EliteBuffer initialized for distillation (relative_ranking={}, top_k={})".format(
+            args.ea_config.get('elite_use_relative_ranking', True),
+            args.ea_config.get('elite_top_k_percent', 0.3)
+        ))
+    
     # Learner
-    learner = le_REGISTRY[args.learner](mac, buffer.scheme, logger, args)
+    learner = le_REGISTRY[args.learner](mac, buffer.scheme, logger, args, elite_buffer=elite_buffer)
 
     if args.use_cuda:
         learner.cuda()
 
     # 初始化进化算法管理器用于分配策略进化
     ea_manager = None
-    if hasattr(args, 'use_ea') and args.use_ea and args.hier_agent["task_allocation"] == "aql":
+    if hasattr(args, 'use_ea') and args.use_ea and args.hier_agent["task_allocation"] in ["aql", "a2c", "ppo"]:
         # 获取进化算法配置
         ea_config = getattr(args, 'ea_config', {})
         # 创建进化算法管理器
@@ -301,7 +329,8 @@ def run_sequential(args, logger):
             sync_interval=ea_config.get('sync_interval', 2000),  # 同步间隔，默认2000
             device=args.device,  # 计算设备
             sync_threshold=ea_config.get('sync_threshold', 0.05),  # 同步阈值，默认0.05
-            enable_bidirectional_sync=ea_config.get('enable_bidirectional_sync', True)  # 启用双向同步，默认True
+            enable_bidirectional_sync=ea_config.get('enable_bidirectional_sync', True),  # 启用双向同步，默认True
+            elite_buffer=elite_buffer  # 精英缓存池（用于蒸馏）
         )
         # 使用当前分配策略初始化种群
         ea_manager.initialize_population(mac.alloc_policy)
@@ -397,24 +426,43 @@ def run_sequential(args, logger):
 
                 learner.train(episode_sample, runner.t_env, episode)
 
-                if args.hier_agent["task_allocation"] in ["aql"]:
-                    filters = {}
-                    if args.hier_agent['decay_old'] > 0:
-                        cutoff = args.hier_agent['decay_old']
-                        filters['t_added'] = lambda t_added: (runner.t_env - t_added) <= cutoff
-                    if not buffer.can_sample(args.batch_size, filters=filters):
-                        continue
+                if args.hier_agent["task_allocation"] in ["aql", "a2c", "ppo"]:
+                    if args.hier_agent["task_allocation"] in ["a2c", "ppo"]:
+                        # A2C和PPO都是on-policy算法，必须使用当前策略rollout的数据
+                        # 直接使用刚rollout的episode_batch（on-policy数据）
+                        if episode_batch is not None:
+                            # 确保episode_batch在正确的设备上
+                            if episode_batch.device != args.device:
+                                episode_batch.to(args.device)
+                            
+                            # 检查是否有足够的决策点
+                            decision_points = episode_batch['hier_decision'].float()
+                            n_decision_points = (decision_points > 0.5).sum().item()
+                            
+                            # 只有当有决策点时才训练（至少需要2个决策点才能计算TD target）
+                            if n_decision_points >= 2:
+                                if args.hier_agent["task_allocation"] == "ppo":
+                                    learner.alloc_train_ppo(episode_batch, runner.t_env, episode)
+                                else:
+                                    learner.alloc_train_a2c(episode_batch, runner.t_env, episode)
+                    else:
+                        # AQL可以使用replay buffer（off-policy）
+                        filters = {}
+                        if args.hier_agent['decay_old'] > 0:
+                            cutoff = args.hier_agent['decay_old']
+                            filters['t_added'] = lambda t_added: (runner.t_env - t_added) <= cutoff
+                        if not buffer.can_sample(args.batch_size, filters=filters):
+                            continue
 
-                    alloc_episode_sample = buffer.sample(args.batch_size, filters=filters)
+                        alloc_episode_sample = buffer.sample(args.batch_size, filters=filters)
 
-                    # Truncate batch to only filled timesteps
-                    max_ep_t = alloc_episode_sample.max_t_filled()
-                    alloc_episode_sample = alloc_episode_sample[:, :max_ep_t]
+                        # Truncate batch to only filled timesteps
+                        max_ep_t = alloc_episode_sample.max_t_filled()
+                        alloc_episode_sample = alloc_episode_sample[:, :max_ep_t]
 
-                    if alloc_episode_sample.device != args.device:
-                        alloc_episode_sample.to(args.device)
+                        if alloc_episode_sample.device != args.device:
+                            alloc_episode_sample.to(args.device)
 
-                    if args.hier_agent["task_allocation"] == "aql":
                         learner.alloc_train_aql(alloc_episode_sample, runner.t_env, episode)
 
         # 执行进化算法评估和进化
@@ -442,6 +490,25 @@ def run_sequential(args, logger):
             # 将最优个体同步到主网络（如果双向同步未启用）
             if not ea_manager.enable_bidirectional_sync:
                 ea_manager.sync_best_to_main(mac.alloc_policy)
+            
+            # 记录EA同步统计信息到TensorBoard
+            if hasattr(ea_manager, 'sync_stats'):
+                logger.log_stat("ea_sync/ea_to_main_syncs", ea_manager.sync_stats.get('ea_to_main_syncs', 0), runner.t_env)
+                logger.log_stat("ea_sync/main_to_ea_syncs", ea_manager.sync_stats.get('main_to_ea_syncs', 0), runner.t_env)
+                logger.log_stat("ea_sync/no_ea_to_main_sync", ea_manager.sync_stats.get('no_ea_to_main_sync', 0), runner.t_env)
+                logger.log_stat("ea_sync/no_main_to_ea_sync", ea_manager.sync_stats.get('no_main_to_ea_sync', 0), runner.t_env)
+                if 'last_sync_param_diff' in ea_manager.sync_stats:
+                    logger.log_stat("ea_sync/last_sync_param_diff", ea_manager.sync_stats['last_sync_param_diff'], runner.t_env)
+                if 'last_sync_fitness' in ea_manager.sync_stats:
+                    logger.log_stat("ea_sync/last_sync_fitness", ea_manager.sync_stats['last_sync_fitness'], runner.t_env)
+            
+            # 记录EA种群统计信息
+            if hasattr(ea_manager, 'stats'):
+                logger.log_stat("ea_population/best_fitness", ea_manager.stats.get('best_fitness', 0), runner.t_env)
+                logger.log_stat("ea_population/avg_fitness", ea_manager.stats.get('avg_fitness', 0), runner.t_env)
+                logger.log_stat("ea_population/worst_fitness", ea_manager.stats.get('worst_fitness', 0), runner.t_env)
+                logger.log_stat("ea_population/generation", ea_manager.stats.get('generation', 0), runner.t_env)
+                logger.log_stat("ea_population/diversity", ea_manager.stats.get('diversity', 0), runner.t_env)
             
             last_ea_eval_T = runner.t_env  # 更新上次进化算法评估时间
             logger.console_logger.info("EA evolution completed")

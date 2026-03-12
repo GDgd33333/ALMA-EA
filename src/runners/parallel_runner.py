@@ -86,6 +86,18 @@ class ParallelRunner:
                     pre_transition_data[k] = [data[k]]
         if self.args.hier_agent['task_allocation'] is not None or self.args.hier_agent["copa"]:
             pre_transition_data['hier_decision'] = [1 for _ in self.parent_conns]
+        
+        # PPO需要初始化old_log_prob和old_actions（虽然它们不在pre_transition_items中）
+        # 这些字段会在compute_allocation中设置，但需要先初始化以避免访问错误
+        if self.args.hier_agent.get("task_allocation") == "ppo":
+            device = self.args.device
+            na = self.args.n_agents
+            nt = self.args.n_tasks
+            # 初始化为0（会在compute_allocation中更新）
+            if 'old_log_prob' in self.batch.data.transition_data:
+                self.batch.data.transition_data['old_log_prob'][:, 0] = th.zeros((self.batch_size, 1), dtype=th.float32, device=device)
+            if 'old_actions' in self.batch.data.transition_data:
+                self.batch.data.transition_data['old_actions'][:, 0] = th.zeros((self.batch_size, na, nt), dtype=th.float32, device=device)
 
         self.batch.update(pre_transition_data, ts=0)
 
@@ -181,9 +193,14 @@ class ParallelRunner:
                         final_env_infos.append(data["info"])
                         if scenario is not None:
                             if self.args.env == 'sc2multiarmy':
+                                # 从data["info"]中获取成功标志
+                                battle_won = data["info"].get('battle_won', False)
+                                episode_solved = data["info"].get('episode_solved', False)
+                                success = data["info"].get('success', False)
                                 final_subtask_infos.append(
                                     {"scenario": scenario, "armies_defeated": armies_defeated,
-                                    "infiltrated_base": infiltrated_base, "spread": spread})
+                                    "infiltrated_base": infiltrated_base, "spread": spread,
+                                    "battle_won": battle_won, "episode_solved": episode_solved, "success": success})
                     if data["terminated"] and not data["info"].get("episode_limit", False):
                         env_terminated = True
                     terminated[idx] = data["terminated"]
@@ -209,8 +226,21 @@ class ParallelRunner:
             self.t += 1
 
             # Add the pre-transition data
-
             self.batch.update(pre_transition_data, bs=envs_not_terminated, ts=self.t, mark_filled=True)
+            
+            # PPO需要初始化old_log_prob和old_actions（虽然它们不在pre_transition_items中）
+            # 这些字段会在compute_allocation中设置，但需要先初始化以避免访问错误
+            # 关键修复：在EA评估时（test_mode=True），也需要初始化old_actions用于精英蒸馏
+            is_ea_evaluation = getattr(self.mac, '_is_ea_evaluation', False)
+            if self.args.hier_agent.get("task_allocation") == "ppo" and (not test_mode or is_ea_evaluation):
+                device = self.args.device
+                na = self.args.n_agents
+                nt = self.args.n_tasks
+                # 初始化为0（会在compute_allocation中更新）
+                if 'old_log_prob' in self.batch.data.transition_data:
+                    self.batch.data.transition_data['old_log_prob'][envs_not_terminated, self.t] = th.zeros((len(envs_not_terminated), 1), dtype=th.float32, device=device)
+                if 'old_actions' in self.batch.data.transition_data:
+                    self.batch.data.transition_data['old_actions'][envs_not_terminated, self.t] = th.zeros((len(envs_not_terminated), na, nt), dtype=th.float32, device=device)
 
 
         if not test_mode:

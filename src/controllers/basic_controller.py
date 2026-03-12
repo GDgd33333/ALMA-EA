@@ -10,7 +10,7 @@ class BasicMAC:
     def __init__(self, scheme, groups, args):
         self.n_agents = args.n_agents
         self.args = args
-        self.learned_alloc = args.hier_agent['task_allocation'] == 'aql'
+        self.learned_alloc = args.hier_agent['task_allocation'] in ['aql', 'a2c', 'ppo']
         self.heuristic_alloc = args.hier_agent['task_allocation'] == 'heuristic'
         self.random_alloc = args.hier_agent['task_allocation'] in ['random', 'random_fixed']
         self.use_alloc = args.hier_agent['task_allocation'] is not None
@@ -33,9 +33,18 @@ class BasicMAC:
             if decision_pts.sum() >= 1:
                 if self.use_alloc:
                     # only update task allocation if at any decision points
+                    new_allocs = None  # 初始化new_allocs
                     if self.learned_alloc:
                         meta_batch = self._make_meta_batch(ep_batch, t_ep)
-                        new_allocs = self.compute_allocation(meta_batch, t_ep=t_ep, t_env=t_env, acting=True, test_mode=test_mode)
+                        # 检查meta_batch是否为空（没有决策点）
+                        # meta_batch['entities'] 是一个tensor，检查其shape[0]是否大于0
+                        if meta_batch and 'entities' in meta_batch and meta_batch['entities'].shape[0] > 0:
+                            result = self.compute_allocation(meta_batch, t_ep=t_ep, t_env=t_env, acting=True, test_mode=test_mode, ep_batch=ep_batch, is_ea_evaluation=getattr(self, '_is_ea_evaluation', False))
+                            if isinstance(result, tuple):
+                                new_allocs, _ = result
+                            else:
+                                new_allocs = result
+                        # 如果meta_batch为空，跳过更新（不应该发生，因为decision_pts.sum() >= 1）
                     elif self.heuristic_alloc:
                         # heuristic is computed at every step in the env and stored in entity2task_mask
                         new_allocs = 1 - ep_batch['entity2task_mask'][:, t_ep, :self.n_agents][decision_pts == 1]
@@ -43,8 +52,10 @@ class BasicMAC:
                         new_allocs = random_allocs(ep_batch['task_mask'][:, t_ep][decision_pts == 1],
                                                 ep_batch['entity_mask'][:, t_ep][decision_pts == 1],
                                                 self.n_agents)
-                    # update task allocation at decision points
-                    self.task_allocations[decision_pts == 1] = new_allocs.to(self.task_allocations.dtype)
+                    
+                    # update task allocation at decision points (only if new_allocs is not None)
+                    if new_allocs is not None:
+                        self.task_allocations[decision_pts == 1] = new_allocs.to(self.task_allocations.dtype)
                 if self.use_copa:
                     if not self.learned_alloc:
                         meta_batch = self._make_meta_batch(ep_batch, t_ep)

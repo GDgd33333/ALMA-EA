@@ -109,6 +109,9 @@ class EpisodeRunner:
                 vid_writer.append_data(self.env.render(allocs=allocs))
             reward, terminated, env_info = self.env.step(actions[0].cpu())
             episode_return += reward
+            # 保存最后一次step的env_info（用于episode结束时获取成功标志）
+            if terminated:
+                last_env_info = env_info.copy()  # 复制一份，避免后续被修改
 
             scenario = None
             if "scenario" in env_info:
@@ -133,10 +136,24 @@ class EpisodeRunner:
             self.hier_timer += 1
 
         if scenario is not None:
+            # 从env_info中获取成功标志（在pop之前，需要从最后一次step的env_info获取）
+            # 注意：env_info在循环中已经被pop了很多字段，需要在episode结束时从最后一次step获取
+            # 由于env_info在循环中被修改，我们需要在episode结束时保存battle_won等信息
             final_subtask_infos.append(
                 {"scenario": scenario, "armies_defeated": armies_defeated,
                  "infiltrated_base": infiltrated_base,
                  "spread": spread})
+        
+        # 在episode结束时，从最后一次env_info中获取成功标志并添加到final_subtask_infos
+        if len(final_subtask_infos) > 0:
+            # 使用last_env_info（episode结束时的env_info）获取成功标志
+            battle_won = last_env_info.get('battle_won', False) if last_env_info else False
+            episode_solved = last_env_info.get('episode_solved', False) if last_env_info else False
+            success = last_env_info.get('success', False) if last_env_info else False
+            # 添加到最后一个final_subtask_infos条目
+            final_subtask_infos[-1]['battle_won'] = battle_won
+            final_subtask_infos[-1]['episode_solved'] = episode_solved
+            final_subtask_infos[-1]['success'] = success
 
         if vid_writer is not None:
             allocs = None
