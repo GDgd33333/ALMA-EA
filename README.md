@@ -1,11 +1,17 @@
-tmux new -s EA
+# ALMA+EA+EA+PPO+自回归分配+精英蒸馏+双向同步的方案
 
-source /data/gu-di/miniconda3/etc/profile.d/conda.sh
+## 训练命令
+/home/gud/ALMA-EA-PPO-AutoReg-experience
+
+tmux new -s ex
+
+source /home/gud/miniconda3/etc/profile.d/conda.sh
 conda activate pytorch
-cd ~/ALMA-EA/src
+cd ~/ALMA-EA-PPO-AutoReg-experience/src
+
+CUDA_VISIBLE_DEVICES=0 python main.py --env-config=ff  --config=qmix_ppo_ea_distill --agent.subtask_cond=mask --hier_agent.task_allocation=ppo --epsilon_anneal_time=2000000 --use_tensorboard=True --save_model=True --save_model_interval=1000000 --hier_agent.action_length=5   2>&1 | tee PPO-EA-experience-save25-1.log  
 
 
-python main.py   --env-config=ff   --config=qmix_atten_ea   --agent.subtask_cond=mask --hier_agent.task_allocation=aql --epsilon_anneal_time=2000000 --use_tensorboard=True --save_model=True --save_model_interval=1000000 --hier_agent.action_length=5   2>&1 | tee ALMAea-save25.log
 
 
 
